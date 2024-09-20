@@ -1,0 +1,879 @@
+---
+title: "Various Models to Predict Deaths Caused by Heart Failure"
+subtitle: "DA5030"
+date: "Spring 2024"
+author: "Jennifer Nguyen"
+output:
+  pdf_document:
+    toc: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r install packages, echo = FALSE, message = FALSE, results = FALSE}
+# install package statements
+install.packages("Boruta", repos = "http://cran.us.r-project.org")
+install.packages("C50", repos = "http://cran.us.r-project.org")
+install.packages("class", repos = "http://cran.us.r-project.org")
+install.packages("caret", repos = "http://cran.us.r-project.org")
+install.packages("DescTools", repos = "http://cran.us.r-project.org")
+install.packages("knitr", repos = "http://cran.us.r-project.org")
+install.packages("pROC", repos = "http://cran.us.r-project.org")
+install.packages("psych", repos = "http://cran.us.r-project.org")
+install.packages("randomForest", repos = "http://cran.us.r-project.org")
+install.packages("readr", repos = "http://cran.us.r-project.org")
+install.packages("RWeka", repos = "http://cran.us.r-project.org")
+install.packages("tidymodels", repos = "http://cran.us.r-project.org")
+install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+```
+
+```{r libraries, echo = FALSE, message = FALSE}
+# load libraries
+library(Boruta)
+library(C50)
+library(class)
+library(caret)
+library(DescTools)
+library(knitr)
+library(pROC)
+library(psych)
+library(randomForest)
+library(readr)
+library(RWeka)
+library(tidymodels)
+library(tidyverse)
+```
+
+\newpage
+# Introduction
+
+My project is focused on machine learning classification methods, specifically through kNN, decision trees, and logistic regression modeling. After constructing each model, I will try to improve each model by cross validation, boosting, tuning, and more. Each method will be trying to predict the class of the target variable. Additionally, ensemble models will also be utilized to make predictions. Specifically, an ensemble model will be constructed as a function that incorporates majority voting of multiple models. A random forest model will also be implemented to showcase homogenous learning. Confusion matrices and performance statistics of each model will be used to compare and contrast for model evaluation.
+
+## About the data
+
+```{r load data, echo = FALSE, message = FALSE, results = FALSE}
+# download from link
+download.file("https://archive.ics.uci.edu/static/public/519/heart+failure+clinical+records.zip", "heart_failure.zip")
+# unzip the file
+unzip("heart_failure.zip")
+# load data
+heart <- read.csv("heart_failure_clinical_records_dataset.csv")
+heart <- heart %>% mutate(
+  anaemia = factor(anaemia), diabetes = factor(diabetes), 
+  high_blood_pressure = factor(high_blood_pressure), sex = factor(sex),
+  smoking = factor(smoking), death_event = factor(DEATH_EVENT)) %>%
+  select(-DEATH_EVENT)
+# view data
+str(heart)
+summary(heart)
+```
+
+
+The dataset used for my final project contains information about heart failure clinical records from the Faisalabad Institute of Cardiology and the Allied Hospital in Faisalabad in Pakistan (Heart Failure Clinical Records, 2020). Data was originally collected to analyze the effects of serum creatinine and ejection fraction on heart failure patients.
+
+The dataset has `r nrow(heart)` observations and `r ncol(heart)` variables. There are 6 categorical variables and 7 numerical variables. A short summary of what each variable is provided below.
+
+Integer or Numerical Variables:
+
+- `age`: age of the patient in years
+- `creatinine-phosphokinase`: CPK levels of blood in mcg/L
+- `ejection_fraction`: amount of blood leaving heart after each contraction as a percentage
+- `platelets`: number of platelets in blood
+- `serum_creatinine`: creatinine levels of blood in mg/dL
+- `serum_sodium`: sodium levels of blood in mEq/L
+- `time`: followup period in days
+
+Categorical Variables:
+
+- `anaemia`: decrease of red blood cells or hemoglobin (1 = anemic, 0 = no anemia)
+- `diabetes`: diabetic status of patient (1 = diabetic, 0 = non-diabetic)
+- `high blood pressure`: blood pressure status of patient (1 = hypertension, 0 = no hypertension)
+- `sex`: sex of patient (1 = woman, 0 = man)
+- `smoking`: smoking status of patient (1 = smoker, 0 = non-smoker)
+- `death_event`: if patient died during follow up period (1 = death, 0 = survived)
+
+The goal of this project is to explore multiple classification models to predict the target variable `death event`. Specific machine learning algorithms that will be utilized are kNN classification, decision trees, binomial logistic regression and ensemble modeling. 
+
+## Assessing data quality
+
+```{r data distribution, echo = FALSE}
+# look at histograms, distributions, and correlations of numeric features
+numeric_columns <- which(sapply(heart, is.numeric))
+pairs.panels(heart[, numeric_columns])
+```
+
+To assess data quality, the distributions of the data were viewed. Looking at the histograms of the numeric columns in the dataset, it can be seen that some skewedness is apparent. For example, the `creatinine_phosphokinase` and `serum_creatinine` features are severely right skewed. The `serum_sodium` feature also looks approximately normal but is not centered. Skewedness indicates the possibility of outliers and lack of normality. Likewise, the correlations of the plot above indicate that the numeric features are not highly correlated with one another, indicating that there is no multicollinearility between the numeric features. Highly correlated features would have correlation values of approximate 0.7 or higher. The lack of collinearity is an assumption in multiple machine learning models and will be needed to be assumed in order to build the logistic regression model later on.
+
+## Separating into training and test data
+
+For each model, the holdout method is incorporated by partitioning the dataset into training and test data. Before partitioning, the data will be randomized to ensure proper random sampling. After partitioning, the training data will be use to train the model and the test data will be used to validate the model for evaluation.
+
+```{r partition into train and test, echo = FALSE, message=FALSE, comment = ""}
+set.seed(1)
+# shuffle data
+heart <- heart[sample(nrow(heart)),]
+# partition data
+validation <- createDataPartition(as.factor(heart$death_event), p = .3, list = FALSE)
+# create training and test data
+test <- heart[validation, 1:12]
+train <- heart[-validation, 1:12]
+# keep target labels
+test_labels <- factor(heart[validation, 13])
+train_labels <- factor(heart[-validation, 13])
+# check proportions to ensure equal randomization
+cat("Proportions of class in target variable in training and test data:")
+prop.table(table(test_labels))
+prop.table(table(train_labels))
+```
+
+The dataset was partitioned using a 70:30 split. This split proportion was chosen to make sure variance on parameter estimates and performance statistics would be kept low. Furthermore, the split proportion is appropriate as the dataset is small, a 80:20 split would be too unequal. Leaving 30% of the original data as testing data provides ample validation for the trained model. The proportions of the class of the target variable in the training and test data are shown above to showcase the results of randomization and partitioning.
+
+# Data pre-processing
+
+## Handling missing values
+
+```{r missing values, echo = FALSE, message = FALSE, include = FALSE, comment = ""}
+# check for missing values
+sapply(train, function(x) sum(is.na(x)))
+sapply(test, function(x) sum(is.na(x)))
+
+# generate missing values
+set.seed(1)
+num_values_to_replace <- 4
+# generate random indices
+random_rows <- sample(1:nrow(train), num_values_to_replace, replace = FALSE)
+random_cols <- sample(1:ncol(train), num_values_to_replace, replace = FALSE)
+# replace values at random positions with NA
+train[random_rows, random_cols] <- NA
+# check for missing values
+sapply(train, function(x) sum(is.na(x)))
+# total missing value percent
+na_percent <- sum(sapply(train, function(x) sum(is.na(x))))/(nrow(train))*100
+```
+
+Before any modeling can be done, missing values have to be taken care of. Fortunately, there are no missing values in this dataset. Missing values were randomly added to the dataset to illustrate proper data preparation procedures. This resulted in `r sum(sapply(train, function(x) sum(is.na(x))))` outliers in the dataset, resulting in `r round(na_percent,2)`% of the rows of the dataset containing a missing value. Typically, if the dataset has 5% or less in missing values, observations with missing values would be removed. However, since this percentage is greater than 5%, missing values were imputed instead. Missing values were handled using mean imputation for numerical variables and mode imputation for categorical variables.
+
+```{r missing value imputation, echo = FALSE, message=FALSE, results = FALSE, comment = ""}
+# save cat features
+cat_columns <- c("anaemia", "diabetes", "high_blood_pressure", "sex", "smoking")
+# impute missing values for train data
+train <- train %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), mean(., na.rm = TRUE), .))) %>%
+  mutate(anaemia = ifelse(is.na(anaemia), Mode(train$anaemia, na.rm = TRUE), anaemia), 
+         diabetes = ifelse(is.na(diabetes), Mode(train$diabetes, na.rm = TRUE), diabetes),
+         high_blood_pressure = ifelse(is.na(high_blood_pressure), 
+                                      Mode(train$high_blood_pressure, na.rm = TRUE),
+                                      high_blood_pressure),
+         sex = ifelse(is.na(sex), Mode(train$sex, na.rm = TRUE), sex),
+         smoking = ifelse(is.na(smoking), Mode(train$smoking, na.rm = TRUE), smoking))
+# ensure cat features are between 0 to 1
+train[,cat_columns] <- lapply(train[, cat_columns], function(x) as.numeric(x) - 1)
+# impute missing values for test data
+test <- test %>%
+  mutate(across(where(is.numeric), ~ifelse(is.na(.), mean(., na.rm = TRUE), .))) %>%
+  mutate(anaemia = ifelse(is.na(anaemia), Mode(train$anaemia, na.rm = TRUE), anaemia), 
+         diabetes = ifelse(is.na(diabetes), Mode(train$diabetes, na.rm = TRUE), diabetes),
+         high_blood_pressure = ifelse(is.na(high_blood_pressure), 
+                                      Mode(train$high_blood_pressure, na.rm = TRUE),
+                                      high_blood_pressure),
+         sex = ifelse(is.na(sex), Mode(train$sex, na.rm = TRUE), sex),
+         smoking = ifelse(is.na(smoking), Mode(train$smoking, na.rm = TRUE), smoking))
+# ensure cat features are between 0 to 1
+test[,cat_columns] <- lapply(test[, cat_columns], function(x) as.numeric(x) - 1)
+# check for missing values
+sapply(train, function(x) sum(is.na(x)))
+sapply(test, function(x) sum(is.na(x)))
+```
+
+## Outlier detection
+
+```{r outliers, echo = FALSE, message = FALSE, results = FALSE, warning = FALSE}
+# create z score function
+z_score <- function(x) {
+  z <- abs((mean(x)-x))/sd(x) 
+  return(z)
+}
+outliers <- train %>%
+  mutate(across(numeric_columns, z_score, .names = "{.col}_z"))
+
+# function to return outlier row indicies
+filter_cond <- function(x) { return(which(x >= 3))
+}
+# apply outlier function to z-score columns
+out_table <- lapply(outliers[13:19], filter_cond) 
+out_table
+
+# show data frame with outliers
+outlier_table <- outliers %>% filter(
+  age_z >= 2.5 | creatinine_phosphokinase_z >= 2.5 | ejection_fraction_z >= 2.5 | 
+  platelets_z >= 2.5 | serum_creatinine_z >= 2.5 | serum_sodium_z >= 2.5 | time_z >= 2.5)
+
+# outlier percentage
+out_percent <- (nrow(outlier_table)/nrow(outliers)) * 100
+# impute outliers with column means, overwrite as main data set that is NOT normalized 
+train <- outliers %>% mutate(
+  age = replace(age, which(age_z >= 2.5), mean(age, na.rm = TRUE)),
+  creatinine_phosphokinase = replace(creatinine_phosphokinase, 
+                                     which(creatinine_phosphokinase_z >= 2.5), 
+                                     mean(creatinine_phosphokinase, na.rm = TRUE)),
+  ejection_fraction = replace(ejection_fraction, which(ejection_fraction_z >= 2.5), 
+                              mean(ejection_fraction, na.rm = TRUE)),
+  platelets = replace(platelets, which(platelets_z >= 2.5), mean(platelets, na.rm = TRUE)),
+  serum_creatinine = replace(serum_creatinine, which(serum_creatinine_z >= 2.5), 
+                             mean(serum_creatinine, na.rm = TRUE)),
+  serum_sodium = replace(serum_sodium, which(serum_sodium_z >= 2.5), 
+                         mean(serum_sodium, na.rm = TRUE)),
+  time = replace(time, which(time_z >= 2.5), mean(time, na.rm = TRUE))) %>%
+  select(1:12)
+summary(train)
+```
+
+```{r outliers for test data, echo = FALSE, message = FALSE, results = FALSE, warning = FALSE}
+# apply same z score function to test data
+outliers <- test %>%
+  mutate(across(numeric_columns, z_score, .names = "{.col}_z"))
+# impute outliers in test data
+test <- outliers %>% mutate(
+  age = replace(age, which(age_z >= 2.5), mean(age, na.rm = TRUE)),
+  creatinine_phosphokinase = replace(creatinine_phosphokinase, 
+                                     which(creatinine_phosphokinase_z >= 2.5), 
+                                     mean(creatinine_phosphokinase, na.rm = TRUE)),
+  ejection_fraction = replace(ejection_fraction, which(ejection_fraction_z >= 2.5), 
+                              mean(ejection_fraction, na.rm = TRUE)),
+  platelets = replace(platelets, which(platelets_z >= 2.5), mean(platelets, na.rm = TRUE)),
+  serum_creatinine = replace(serum_creatinine, which(serum_creatinine_z >= 2.5), 
+                             mean(serum_creatinine, na.rm = TRUE)),
+  serum_sodium = replace(serum_sodium, which(serum_sodium_z >= 2.5), 
+                         mean(serum_sodium, na.rm = TRUE)),
+  time = replace(time, which(time_z >= 2.5), mean(time, na.rm = TRUE))) %>%
+  select(1:12)
+# check to see if everything is imputed
+summary(test)
+```
+
+The data was checked to see if there were any outliers using the z score approach. Any column that had an observation that had a z-score greater than 2.5 standard deviations was considered an outlier. There were `r nrow(outlier_table)` outliers found that constitute approximately `r round(out_percent,4)`% of the dataset. Outliers were replaced and imputed using the mean of their respective columns. 
+
+```{r outlier plot, echo = FALSE}
+# check distributions
+pairs.panels(train[, numeric_columns])
+```
+
+
+The plot above shows the histograms of the numeric features after outliers were imputed. Some features are more centered and look approximately normal such as the `serum_sodium` feature and `platelets` feature. Previously skewed features are still skewed but are less severe. Correlations have slightly increased but are still not high enough to be of concern. Scatterplots have points that are more concentrated together, there are less single data points that are far away from the main bulk of the data distribution.
+
+
+## Encoding categorical features
+```{r encoding, echo = FALSE, message = FALSE, results = FALSE, comment = ""}
+# check if variables are encoded
+summary(train[,cat_columns])
+```
+
+The categorical variables are already encoded upon downloading the dataset. Since all categorical features only had two levels, they were binary encoded so that they would have a value of 0 or 1. Likewise the categorical features were converted to numeric data type for data modeling.
+
+## Feature engineering
+
+Regarding feature engineering, I wanted to see if there were any potential synergistic effects between hypertension and diabetes. To showcase the interaction, a new feature was created by multiplying the binary variables representing each condition. For example, if the patient were to have both a positive hypertension value and positive diabetes value, they would be positive for the interaction variable. But if they were negative for one condition or both conditions, the patient would have a negative interaction value. 
+
+```{r feature engineering, echo = FALSE, message = FALSE, comment = ""}
+# create new variable for train data
+train$hbp_diabetes <- (as.integer(train$high_blood_pressure) - 1)  * (as.integer(train$diabetes) - 1)
+train$hbp_diabetes <- factor(train$hbp_diabetes)
+cat("Summary statistics of hbp_diabetes feature:")
+summary(train$hbp_diabetes)
+# create new variable for test data
+test$hbp_diabetes <- (as.integer(test$high_blood_pressure) - 1)  * (as.integer(test$diabetes) - 1)
+test$hbp_diabetes <- as.numeric(test$hbp_diabetes) - 1
+train$hbp_diabetes <- as.numeric(train$hbp_diabetes) -1
+# save train and test data for dt models
+dt_train <- train
+dt_test <- test
+```
+
+Subsequently, the new interaction variable named `hbp_diabetes` is a binary categorical variable with 0 for no interaction and 1 for interaction. The summary statistics of the new variable for the `train` data are showcased above.
+
+At this point of data pre-processing, training and test datasets for decision tree modeling were saved as `dt_train` and `dt_test`. The pre-processing steps needed for decision tree modeling are missing value and outlier imputation, encoding of categorical variables, and the included feature engineering. Standardization, feature selection, and feature transformation are not needed for decision tree modeling.
+
+## Standardization of data
+
+```{r standardization, echo = FALSE, message = FALSE, comment = ""}
+# save as knn_train and knn_test
+knn_train <- train
+knn_test <- test
+# normalize function
+normalize <- function(x) {
+return ((x - min(x)) / (max(x) - min(x)))
+}
+
+# normalize outlier-free numeric train data, keep categorical columns
+knn_train <- as.data.frame(lapply(knn_train, function(col) {
+  if(is.numeric(col)) {
+    normalize(col)
+  } else {
+    col
+  }
+}))
+cat("Summary statistics of training data:")
+summary(knn_train)
+
+# do the same to test data
+knn_test <- as.data.frame(lapply(knn_test, function(col) {
+  if(is.numeric(col)) {
+    normalize(col)
+  } else {
+    col
+  }
+}))
+```
+
+Above is the summary statistics of the standardized training dataset. Using min-max normalization, the numeric columns were normalized to ensure that the features are rescaled to a standard range. This also ensures that each feature contributes the same approximate amount to the target variable. If standardization or scaling were not incorporated, each variable would contribute a different amount to the model, resulting in biased results. 
+
+However, please note that standardization is only needed for kNN modeling, as decision tree and logistic regression are not affected by standardization of data. Separate training and test datasets will be used for the other models.
+
+## Feature selection with the Boruta method
+
+Feature selection allows for the identification of important features to be identified and elimination of the unimportant features. Models that use feature selection reduce their computational times, increase prediction accuracy, and improve model interpretability. For this project, the Boruta method was utilized as the method of feature selection.
+
+```{r feature selection, echo = FALSE, comment = ""}
+# combine train and train labels to run boruta
+boruta_data <- cbind(knn_train, train_labels)
+colnames(boruta_data)[ncol(boruta_data)] <- "death_event"
+# run boruta method
+train_boruta <- Boruta(death_event ~ . , data = boruta_data)
+train_boruta
+# select features found significant for knn data
+selected <- c("age", "ejection_fraction", "serum_creatinine",
+              "time", "creatinine_phosphokinase", "serum_sodium")
+# save knn train and test data
+knn_train <- knn_train[, selected]
+knn_test <- knn_test[, selected]
+```
+
+From the feature selection via Boruta method, the features found to be significant are `age`, `ejection_fraction`, `serum_creatinine`, and `time`. Possibly significant features are `creatinine_phosphokinase` and `serum_sodium`. Unfortunately, it looks like the engineered feature `hbp_diabetes` was found to be non-significant. Since the Boruta method found the individual `high_blood_pressure` and `diabetes` features to be non-significant, it logically makes sense that the interaction of the two would also be non-significant.  
+
+For the kNN model, there is no embedded method of feature selection in the model. Therefore, the `knn_train` and `knn_test`  has the features found to be significant and will be used to build the kNN model. That is essentially why `knn_train` and `knn_test` datasets were saved at this point of pre-processing. To reiterate, the pre-processing steps done to the `knn_train` and `knn_test` were missing value and outlier imputation, encoding, standardization, feature engineering, and feature selection. 
+
+On the other hand, the decision tree and logistic regression model already have embedded methods for feature selection. The decision tree algorithm is greedy, using forward selection to select the best feature subset. The logistic regression model will incorporate step-wise backwards elimination in order to find significant features.
+
+## Feature transformation
+
+```{r feature transformation, echo = FALSE, message = FALSE, results = FALSE}
+# save for logistic reg model
+log_train <- train
+log_test <- test
+# plot layout
+par(mfrow = c(1, 2))
+# before transformation histogram
+hist(train$creatinine_phosphokinase, col="pink", main = "Before log transformation of 
+     creatinine_phosphokinase")
+# run shapiro test on numeric columns
+sapply(log_train[,numeric_columns], function(x) shapiro.test(x))
+sapply(log_test[,numeric_columns], function(x) shapiro.test(x))
+# transform train_imputed data
+log_train <- log_train %>%
+  mutate(creatinine_phosphokinase = log(creatinine_phosphokinase),
+         serum_creatinine = log(serum_creatinine))
+# transform test_imputed data
+log_test <- log_test %>%
+  mutate(creatinine_phosphokinase = log(creatinine_phosphokinase),
+         serum_creatinine = log(serum_creatinine))
+# after transformation histogram
+hist(log_train$creatinine_phosphokinase, col="purple", main = "After log transformation of
+     creatinine_phosphokinase")
+```
+
+One requirement of logistic regression is that features have to exhibit reasonably normal distributions. Recall that the distributions of some features are severely right skewed when first looking at the data at a glance. Non-normal distributions were also confirmed by running the Shapiro-Wilk test. To combat skewedness, log transformations on the `creatinine_phosphokinase` and `serum_creatinine` were done. To showcase the effect of log transformation, histograms of the `creatinine_phosphokinase` variable before and after log transformation can be seen above. Notice how after log transformation, the distribution looks approximately normal compared to the severe right skewedness from before. 
+
+Since feature transformation is just needed for logistic regression modeling, `log_test` and `log_train` datasets will be saved here. Please note that the `log_test` and `log_train` did not undergo standardization, as standardization is not a necessary pre-processing step for logistic regression modeling. Likewise, feature selection is not needed for logistic regression as the model has an embedded method of feature selection through step-wise elimination.
+
+## Results of data pre-processing
+```{r pre-processing, echo = FALSE}
+# create summarized table for pre-processing
+preproc <- data.frame(
+  knn = c("X", "X", "X", "X", "X", "X", ""),
+  dt = c("X", "X", "X", "X", "", "", ""),
+  log = c("X", "X", "X", "X", "", "", "X")
+)
+pp_col <- c("kNN", "Decision Tree", "Logistic Regression")
+colnames(preproc) <- pp_col
+pp_row <- c("Missing values imputed", "Outliers imputed", "Encoding categorical features",
+            "Feature engineering", "Standardization", "Feature selection",
+            "Feature transformation")
+rownames(preproc) <- pp_row
+kable(preproc, caption = "Pre-processing steps for each model")
+```
+
+This concludes the pre-processing stage of the data. To reiterate, training and test data were partitioned after randomizing the original dataset. Then, the training and test data underwent pre-processing. The pre-processing steps for each model are summarized in the table above since each model has different required steps. Each model has their own training and test dataset pair (named after the model, i.e. `knn_train` or `log_test`) but have the same missing values/outliers imputed, the same encoding, and the same feature engineering. The training and test data pairs will be used for their respectively named models. 
+
+# kNN modeling
+
+The kNN classification algorithm was chosen due to the quick training phase and simpleness of the model. Likewise, there are no assumptions about the distributions in the numeric features. Recall that there was some initial skewedness was observed for some variables but feature transformation was not a requirement for this algorithm. Additionally, the nature of the algorithm as an instance-based learner and non-parametric model was chosen to add some variability to models in predicting the target feature (Lantz, 2023). 
+
+## Data preparation for kNN modeling
+
+```{r knn train and test data, echo = FALSE, include = FALSE}
+# view knn train and test data
+summary(knn_train)
+summary(knn_test)
+```
+
+
+Prior to building the kNN classification model, outliers and missing values must be imputed, numeric features need to be standardized and categorical features need to be encoded, and feature engineering were done. Likewise, feature selection is another preprocessing step performed as the kNN model does not have any embedded methods in the algorithm. These steps are necessary in order to shape the data and produce an effective model with interpretative results.
+
+## Training the kNN model 
+
+```{r train and test knn model, echo = FALSE, comment = ""}
+# initialize vector to store predictions
+pred <- vector("list", 20) 
+mse_values <- numeric(20)
+for (i in 1:20) {
+  pred[[i]] <- as.numeric(class::knn(train = knn_train, test = knn_test, cl = train_labels, k = i))
+  # calculate mean squared error
+  mse_values[i] <- mean((as.numeric(test_labels) - pred[[i]])^2)
+}
+# create dataframe to store values
+k_mse <- data.frame(
+  k = 1:20,
+  mse = mse_values
+)
+# table to show values
+kable(k_mse, caption = "MSE values at each K for imputed data")
+# lowest mse is best model, k = 8
+# plot to show k vs mse
+ggplot(k_mse, aes(x = k, y = mse)) + geom_line() + 
+  labs(title = "K vs MSE for imputed data",
+       x = "k (number of neighbors)",
+       y = "Mean Squared Error (MSE)")
+```
+
+Using the knn function from the class package, a loop was set up to train the model on the imputed data with various k values from 1 to 20. The mean squared error was calculated from the predictions based off each k-values. From the plot above, it can be seen that the lowest MSE was `r min(k_mse$mse)` with a respective k value of `r which.min(k_mse$mse)` or `r which.min(k_mse$mse) + 1`. This is surprising since the typical k-value is usually the square root of the number of observations in the training data (Lantz, 2023). For this situation, the expected k value is approximately 14 since there are `r nrow(knn_train)` observations. However, the k-value with the lowest MSE will be used to construct the kNN model due to the findings show in the line plot.
+
+## Predicting with the kNN model
+
+To look at the predictions with the k value of `r which.min(k_mse$mse)`, a trained kNN model with the specified k-value of `r which.min(k_mse$mse)` was used to predict the target value on the test data. A confusion matrix was then used to compare the predicted results of the trained kNN model with the actual results.
+
+```{r cfm for knn, echo = FALSE, comment = ""}
+# train and predict knn in one line
+knn_caret_predict <- class::knn(train = knn_train, test = knn_test, 
+                                cl = train_labels, k = which.min(k_mse$mse))
+# knn cfm
+knn_imputed_results <- confusionMatrix(knn_caret_predict, test_labels, positive = "1")
+knn_imputed_results
+```
+
+Looking at the results of the confusion matrix, the model results in `r knn_imputed_results$table[1]` true negatives, `r knn_imputed_results$table[4]` true positives, `r knn_imputed_results$table[2]` false positives, and `r knn_imputed_results$table[3]` false negatives. The model boasts an accuracy of `r knn_imputed_results$overall[1]` accuracy. The sensitivity is `r knn_imputed_results$byClass[1]` and the specificity is `r knn_imputed_results$byClass[2]`. Lastly, the kappa value was `r knn_imputed_results$overall[2]`, indicating a fair agreement between the prediction and true values. The sensitivity is rather low and is concerning as it means that there are more false negatives. The presence of false negatives indicates that patients are predicted with survival when exhibiting the characteristics and symptoms that will actually result in death. A high sensitivity is very important in cases where death and survival are predicted in the health industry. Therefore to see if we can improve such statistics, cross validation will be applied in the next section.
+
+## Improving the kNN model with cross-validation
+
+Since the dataset is small in size, k-fold cross validation was used to see if performance can be improved with more reliable results. Cross-validation is a method used to divide the dataset in k folds/subsets. The kNN model will be trained and evaluated k times with those subsets. The resulting performance statistics will be averaged to create generalized model results. Using k-fold cross validation will also prevent overfitting. 
+
+The value of k-fold was chosen to be 3 since the original dataset is so small. The training data would be split 3-fold, modeled with each subset, before averaging out the performance statistics. 
+
+## Training the cross-validation kNN model
+
+```{r cv knn, echo = FALSE, comment = ""}
+# combine train data and train labels for cv
+train_knn <- cbind(knn_train, train_labels)
+colnames(train_knn)[ncol(train_knn)] <- "death_event"
+# cross validation
+ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+knnFit <- train(death_event ~ ., data = train_knn, method = "knn", 
+                trControl = ctrl, preProcess = c("center", "scale"), 
+                tuneLength = 10,
+                tuneGrid = expand.grid(k=1:20))
+knnFit
+# plot of cv accuracies vs k
+plot(knnFit)
+```
+
+Cross validation results indicated that the most optimal k-value was `r which.max(knnFit$results[,3])` with an accuracy of `r max(knnFit$results[,2])` and kappa of `r max(knnFit$results[,3])`. The cross-validation kNN model with a k-value of `r which.max(knnFit$results[,3])` is then used to make predictions on the test data. Already, the main difference between the regular kNN model and cross-validated kNN model can be seen. The difference in k-values indicate that cross-validation found that the highest accuracy would result from a different k-value than the initial model. It can also be noted that the k-value of `r which.min(k_mse$mse)` also had a smaller peak in accuracy. However, accuracy values can be shown to be relatively high as k equals 13 or more. Using the most optimal k-value of `r which.max(knnFit$results[,3])`, the kNN cross-validationn model was used to predict the target variable in the next section.
+
+## Predicting with the cross-validation kNN model
+
+```{r cv 2, echo = FALSE, comment = ""}
+# predict for knn cv model
+knn_cv_pred <- predict(knnFit, newdata = knn_test, type ="raw")
+# knn cv cfm
+knn_cv_results <- confusionMatrix(knn_cv_pred, test_labels, positive = "1")
+knn_cv_results
+```
+
+
+The resulting confusionMatrix from the cross validation kNN model had `r knn_cv_results$table[1]` true negatives, `r knn_cv_results$table[4]` true positives, `r knn_cv_results$table[2]` false positives, and `r knn_cv_results$table[3]` false negatives. This model had an accuracy of `r knn_cv_results$overall[1]` accuracy. The sensitivity is `r knn_cv_results$byClass[1]` and the specificity is `r knn_cv_results$byClass[2]`. The kappa value is `r knn_cv_results$overall[2]`, indicating a fair agreement. The sensitivity is significantly lower than the previous kNN model, allowing us to conclude the kNN cross-validation model has worst performance out of the two models. Likewise, accuracy and kappa values are lower for the cross-validated model further supporting this decision.
+
+
+## kNN model evaluation
+
+With the kNN models, the accuracies of both the regular and boosted models are decently high but not high enough to be implemented in a real-world setting. Specifically, for a situation where the diagnosis and survivability of a patient depends on a model, 70% accuracies are not enough. Likewise, the cross validation kNN model had the lower sensitivity of `r knn_cv_results$byClass[1]`, already making it a model that should be ruled out. A highly sensitive model is the preferred as a model that can have the least amount of false negatives is essential. Less false negatives ensures that less fewer cases of predicted death are missed for heart failure cases. This is very important for a model in a clinical setting.
+
+Possible reasons why the kNN models did not perform as well as expected may be due to the quick training phase on the already small dataset. The quick training phase does not allow for the algorithm to learn the subtle patterns in the data. Instead, the fast training phase may generalize and cause overfitting. Likewise the difference in k-values between the kNN model and kNN cross-validation model may indicate underlying issues. Choosing a k-value is important as the wrong value can also lead to overfitting and high variance. 
+
+# Decision tree modeling
+
+A decision tree model was chosen to test the dataset as the flowchart tree structure in an easy to read and understand format. Likewise, decision trees can be used on small datasets and works well as a classifier that can handle multiple types of problems. This algorithm is easy to use in certain situation like credit score modeling or market studies. Similarly, decision trees can be used for diagnosis medical conditions given laboratory test results, patient demographics, and symptoms. Given that the goal of this project is to predict survival status of heart failure patients, the decision tree algorithm's use in diagnosing medical conditions is fitting.
+
+A decision tree model was constructed using the C50 package. With recursive partitioning, otherwise known as the divide and conquer method, the dataset is continually split into subsets that are then split and so on. The partitioning stops when the decision tree algorithm determines the optimum stopping criteria to predict the target variable (Lantz, 2023). Afterwards a boosted decision tree model will be constructed to see if performance can be improved from the base decision model. 
+
+In regards to pruning, post-pruning was chosen over pre-pruning as the chosen method for generalization. Pre-puning was a method that avoids extra work at the cost of missing patterns that may occur if the tree were allowed to grown. However, the dataset is rather small and therefore not computationally extensive. Post-pruning would allow the decision tree model to grow largely, allowing the model to find any possible pattern that may be important given the opportunity. Post-pruning is incorporated in the C5.0 algorithm package.
+
+## Data preparation
+
+```{r dt train and test data, echo = FALSE, include = FALSE}
+# view dt train and test data
+summary(dt_train)
+summary(dt_test)
+```
+
+For decision tree modeling, missing value and outlier handling, binary encoding, and feature engineering were the main pre-processing steps. The decision tree algorithm is based on dividing and partitioning the data in order to make predictions. Therefore, the decision tree model is not sensitive to feature transformation or feature scaling because the partitioning does not change with the transformation monotonically. Therefore, the `dt_train` and `dt_test` dataset will be used to train and test the decision tree model. 
+
+## Training the C5.0 decision tree model 
+
+```{r tree, echo = FALSE, comment = ""}
+# combine train and train label
+tree_train <- cbind(dt_train, train_labels)
+colnames(tree_train)[ncol(tree_train)] <- "death_event"
+# train dt model
+c50_model <- C5.0(death_event ~ ., data = tree_train)
+c50_model
+summary(c50_model)
+```
+
+Using the C5.0 package, the decision tree model was trained. The resulting model had a tree size of `r c50_model$size`  based off of 13 predictors. Looking at the summary statistics, the attribute usage mainly used three features; `time`, `ejection_fraction` and `age`. Automatically, the C5.0 decision tree model incorporates post-pruning when building the model.
+
+## Predicting with the C5.0 decision tree model
+``` {r tree predictions, echo = FALSE, comment = ""}
+# predict with dt model
+tree_pred <- predict(c50_model, dt_test, type = "class")
+# dt cfm
+tree_results <- confusionMatrix(tree_pred, test_labels, positive = "1")
+tree_results
+```
+
+From the decision tree model, the predictions resulted in a confusionMatrix with `r tree_results$table[1]` true negatives, `r tree_results$table[4]` true positives, `r tree_results$table[2]` false positives, and `r tree_results$table[3]` false negatives. This model had an accuracy of `r tree_results$overall[1]`. The sensitivity is `r tree_results$byClass[1]` and the specificity is `r tree_results$byClass[2]`. The kappa was `r tree_results$overall[2]`, indicating a moderate agreement between predictions and actual values. Comparing to the previous kNN models, the C5.0 decision tree model has higher accuracy and sensitivity values, but a lower specificity. Specifically, the decision tree model showcased the highest sensitivity seen so far, but is still not high enough to be considered for real-life applications. However, it can be considered the best performing model constructed so far. To see if the performance statistics could be further improved, a boosted model with 10 trials was constructed.
+
+## Building the boosted decision tree model
+```{r tree boosted, message = FALSE, echo = FALSE, results = FALSE}
+# train boosted dt model
+c50_boosted_model <- C5.0(death_event ~ ., data = tree_train, trials = 10)
+c50_boosted_model
+summary(c50_boosted_model)
+```
+
+There were 10 trials conducted with the boosted C50 model. The features `age`, `creatinine_phosphokinase`, `ejection_fraction`, `serum_creatinine`, and `time` had attribute usage of 90% or more to construct the model. Notably, four out of five of those features were chosen in the Boruta method feature selection, reinforcing that those features are significant predictors for the target variable. The boosted model was then used to predict the target variable with the test data.
+
+## Predicting with the boosted decision tree model
+```{r tree boosted cm, echo = FALSE, comment = ""}
+# predict with dt boosted model
+tree_boosted_pred <- predict(c50_boosted_model, dt_test, type = "class")
+# boosted dt cfm
+tree_boosted_results <- confusionMatrix(tree_boosted_pred, test_labels, positive = "1")
+tree_boosted_results
+```
+
+The predictions from the boosted tree model resulted in a confusion matrix with `r tree_boosted_results$table[1]` true negatives, `r tree_boosted_results$table[4]` true positives, `r tree_boosted_results$table[2]` false positives, and `r tree_boosted_results$table[3]` false negatives. The boosted tree model had an accuracy of `r tree_boosted_results$overall[1]` accuracy. The sensitivity is `r tree_boosted_results$byClass[1]` and the specificity is `r tree_boosted_results$byClass[2]`. The kappa value is `r tree_boosted_results$overall[2]`, indicating a moderate agreement. Boosting did not improve the decision tree model, as the boosted model had lower performance statistics compared to the original decision tree model. One possible reason for this is that boosting can cause overfitting, resulting it harder for the model to accurately predict test data. 
+
+## Decision tree model evaluation
+
+Comparing decision tree models, it can be the seen that the regular C5.0 decision tree model overall has a higher accuracy of `r tree_results$overall[1]` and higher sensitivity of 
+`r tree_results$byClass[1]`. However, the boosted decision has a lower specificity of  `r tree_results$byClass[2]`. The sensitivity is important as incorrectly predicting survival as the outcome for heart failure patient when it is actually death should be avoided. Therefore, though the accuracy values are comparable, the better model would be the one with the higher sensitivity. In this case, the regular non-boosted decision tree model is the better model.
+
+Comparing to the kNN models, both the decision tree model had the highest accuracy, sensitivity, kappa values so far out of all the models. This indicates that the decision tree algorithm may be one of the better models to predict heart failure for patients. However, though performance statistics are good in comparison to other models, it does not meet industry standards for real-world application.
+
+Possible reasons for the performance of this model in comparison to previous models is that decision trees are prone to underfitting or overfitting. Likewise, one weakness of the C5.0 algorithm is that it is sensitive to small changes in training data therefore making the decision logic also sensitive. Further improvements can be explored by incorporating the decision tree algorithm in an ensemble model.
+
+# Logistic regression modeling
+
+Binomial logistic regression modeling is another method that can be used for classification. It differs from kNN modeling and decision tree modeling as it is a parametric statistical method that fits a regression curve on a categorical predictor variable (Lantz, 2023). Logistic modeling can handle continuous and categorical independent variables and requires normal distributions that can be achieved by data transformation. The binomial logistic regression model predicts the probability of an observation being in one class of the target variable. This model was chosen due to its ability to provide information regarding effectiveness of predictor variables in terms of size of coefficients and positive or negative associations with the target variable. Likewise the heart failure data set is not highly dimensional meaning logistic regression should be less prone to overfitting.
+
+## Data preparation
+
+```{r log train and test data, echo = FALSE, include = FALSE}
+# view log train and test data
+summary(log_train)
+summary(log_test)
+```
+
+To construct the logistic regression model for classification, steps must be taken in order to prepare the data for the model. Encoding and handling missing values and outliers are necessary steps prior to model building. Feature engineering was incorporated as well. Logistic regression modeling does need to have reasonably normal distributions and therefore feature transformation needs to be done to offset skewedness in data distributions. Standardization or scaling does not need to be done as the model performance is unaffected by it. Feature selection does also not need to be done as a pre-processing step as the model has an embedded method of stepwise elimination in the model itself.
+
+
+## Training the logistic regression model
+```{r training lr model, echo = FALSE, message = FALSE, comment = ""}
+# combine log train and train labels
+log_train <- cbind(log_train, train_labels)
+colnames(log_train)[ncol(log_train)] <- "death_event"
+# train logistic regression model
+log_model <- glm(death_event ~ ., family = binomial, data = log_train)
+# backwards elimination
+step_model <- stats::step(log_model, direction = "backward", trace = TRUE)
+summary(step_model)
+```
+
+The procedural stepwise backwards elimination of the binomial logistic regression is shown above. The significant variables were found to be `age`, `ejection_fraction`, `serum_creatinine` and `time`. The final model had the lowest AIC of `r step_model$aic`. In comparison, the starting model in the stepwise backwards elimination was 153.16. The model with the lowest AIC value is considered the better fitting model.
+
+The logistic regression model equation is Y = `r step_model$coefficients[1]` + `r step_model$coefficients[2]`(age) + `r step_model$coefficients[3]`(ejection_fraction) + `r step_model$coefficients[4]`(serum_creatinine)  + `r step_model$coefficients[5]`(time).
+
+One thing I'd like to note was that the stepwise backwards elimination resulted in the finding the same significant features that were found earlier in the final project with the Boruta method. This reinforces the results of feature selection and signifies that the tentative features that may have been significant with Boruta method might not actually be significant. 
+
+## Predicting with the logistic regression model
+```{r predict log model, echo = FALSE, comment = "", message = FALSE}
+# predict with trained model
+log_pred <- predict(step_model, newdata = log_test, type = "response")
+log_death_pred <- factor(ifelse(log_pred > 0.5, 1, 0))
+# log cfm
+log_results <- confusionMatrix(log_death_pred, test_labels, positive = "1")
+log_results
+```
+
+The predictions from the logistic regression model resulted in a confusionMatrix with `r log_results$table[1]` true negatives, `r log_results$table[4]` true positives, `r log_results$table[2]` false positives, and `r log_results$table[3]` false negatives. The logistic regression model had an accuracy of `r log_results$overall[1]` accuracy. The sensitivity is `r log_results$byClass[1]` and the specificity is `r log_results$byClass[2]`. The kappa value is `r log_results$overall[2]`, indicating a moderate agreement between predictions and true target values.
+
+Compared to the kNN and decision tree models, the logistic regression model has the comparable accuracy, specificity, and sensitivity values. None of the performance statistics of the logistic regression model are significantly high. Sensitivity is only `r log_results$byClass[1]`, indicating that patients are still getting predicted survival when its actually death less than half the time. To see if the model can be further improved I can look towards tuning the logistic regression model in the next section.
+
+## Improving the logistic regression model 
+
+```{r tuned log model, echo = FALSE, comment =""}
+set.seed(1)
+#  logistic regression model with penalty and mixture hyperparameters
+log_reg <- logistic_reg(mixture = tune(), penalty = tune(), engine = "glmnet")
+
+# define grid search for hyperparameters
+grid <- grid_regular(mixture(), penalty(), levels = c(mixture = 4, penalty = 3))
+
+# workflow for the model
+log_reg_wf <- workflow() %>%
+  add_model(log_reg) %>%
+  add_formula(death_event ~ .)
+
+# cv resampling method for grid search
+folds <- vfold_cv(log_train, v = 5)
+
+# tune hyperparameters using grid search
+log_reg_tuned <- tune_grid(
+  log_reg_wf,
+  resamples = folds,
+  grid = grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+# find best parameters for model
+select_best(log_reg_tuned, metric = "roc_auc")
+# train model with best parameters
+log_reg_final <- logistic_reg(penalty = 1e-10, mixture = 0) %>%
+                 set_engine("glmnet") %>%
+                 set_mode("classification") %>%
+                 fit(death_event~., data = log_train)
+# predict with trained and tuned log model
+tuned_pred <- predict(log_reg_final, new_data = log_test, type = "class")
+tuned_pred <- factor(tuned_pred$.pred_class, levels = levels(test_labels))
+# log tuned cfm
+log_tuned_results <-confusionMatrix(tuned_pred, test_labels, positive = "1")
+log_tuned_results
+```
+
+An attempt to improve the logistic regression model was done by hyperparameter tuning. Specifically, the  mixing and penalty arguments were set to be tuned with a grid to find the most optimal values (Chugh, 2023).  The predictions from the tuned logistic regression model resulted in a confusionMatrix with `r log_tuned_results$table[1]` true negatives, `r log_tuned_results$table[4]` true positives, `r log_tuned_results$table[2]` false positives, and `r log_tuned_results$table[3]` false negatives. The tuned model had an accuracy of `r log_tuned_results$overall[1]` accuracy. The sensitivity is `r log_tuned_results$byClass[1]` and the specificity is `r log_tuned_results$byClass[2]`. The kappa value is `r log_tuned_results$overall[2]` considered a fair agreement between predictions and actual values.
+
+## Logistic regression model evaluation
+
+Comparing results from the confusion matrices of the untuned and tuned logistic regression models, the former model performed slightly better. Accuracy values differed by a small margin, but the untuned model had a higher sensitivity of `r log_results$byClass[1]`. This sensitivity is still rather dismal overall, especially since previous models have had higher sensitivity values. Specifically, the tuned model had the lowest sensitivity model out of all models so far, making it eliminated from being the best performing model. In the next section, ensemble modeling will be used to see if a combination of multiple models can prove to be the ideal model.
+
+Possible reasons for the performance may be that the logistic regression is that there are numerous assumptions that need to be satisfied. However, real-world data may not be able to satisfy such conditions. Likewise, logistic regression works well with larger datasets. Performance statistics could be improved if more observations were obtained.
+
+# Ensemble model
+
+Ensemble models were incorporated to showcase a method of meta-learning (Lantz, 2023). Ideally, the combination of multiple, diverse models in an ensemble method would result in improved performance statistics. 
+
+## Simple ensemble model with majority voting
+The ensemble model was built using a combination of three different machine learning classification models: kNN model, C50 boosted decision tree model, and stepwise backwards elimination logistic regression model. These models were chosen to add tuning to the simple ensemble model. The function was constructed so that the a training data, test data, training labels, and test labels could be inputted. The models are then individually trained and will then make predictions for the test data. The predictions are stored in a data frame. At the end of the ensemble function, the code is written to look at the 3 different predictions from each model for each observation, decide through majority vote for the final predictions, and then output a final prediction that goes into a confusion matrix. 
+
+```{r ensemble, echo = FALSE, comment = ""}
+ensemble <- function(dt_train, dt_test, train_labels, test_labels) {
+  # combine train data and train labels for models
+  train <- cbind(dt_train, train_labels)
+  colnames(train)[ncol(train)] <- "death_event"
+  # build models (knn cv, c50 boosted, log regression)
+  # decision tree and log regression model use full datasets
+  tree_model <- C5.0(death_event ~ ., data = train, trials = 10)
+  lr_model <- stats::step(glm(death_event ~ ., family = binomial, 
+                       data = train), direction = "backward", trace = FALSE)
+  # make predictions
+  knn_pred <- class::knn(train = dt_train, test = test, 
+                                cl = train_labels, k = 17)
+  tree_pred <- predict(tree_model, test, type = "class")
+  lr_pred <- predict(lr_model, newdata = test, type = "response")
+  log_pred <- factor(ifelse(lr_pred > 0.5, 1, 0))
+  # store predictions
+  preds <- data.frame(
+    knn = knn_pred,
+    decision_tree = tree_pred,
+    logistic_regression = log_pred)
+  # majority vote
+  ens_pred <- preds %>% 
+    mutate(across(everything(), as.numeric) - 1) %>%
+    mutate(row_sum = rowSums(.)) %>%
+    mutate(final_pred = factor(ifelse(row_sum >= 2, 1, 0), levels = levels(test_labels))) 
+  # output confusion matrix
+  results <- confusionMatrix(ens_pred$final_pred, factor(test_labels), positive = "1")
+  return(ens_pred$final_pred)
+}
+```
+
+## Predicting with the simple ensemble model
+
+``` {r ensemble prediction, echo = FALSE, comment = ""}
+# predict with ensemble model
+ens_pred <- ensemble(dt_train, dt_test, train_labels, test_labels)
+# ens cfm
+ens_results <- confusionMatrix(test_labels, ens_pred, positive = "1")
+ens_results
+```
+
+The predictions from the ensemble model resulted in a confusionMatrix with `r ens_results$table[1]` true negatives, `r ens_results$table[4]` true positives, `r ens_results$table[2]` false positives, and `r ens_results$table[3]` false negatives. The simple ensemble model had an accuracy of `r ens_results$overall[1]` accuracy. The sensitivity is `r ens_results$byClass[1]` and the specificity is `r ens_results$byClass[2]`. The kappa value is `r ens_results$overall[2]`, indicating a moderate agreement.
+
+Overall, the simple ensemble model performs rather averagely. None of the performance statistics were the highest or lowest but were rather in the middle compared to the other models. This is rather logical since the simple ensemble is basically averaging the results of previously constructed models. To compare to another ensemble method, a random forest model will be constructed in the next section. 
+
+## RandomForest model
+
+A random forest model was also chosen to showcase a homogenous ensemble model that incorporated bagging. A random forest algorithm can handle both categorical and continous features and has incorporated feature selection (Lantz, 2023). This was chosen to compare and contrast against the simple ensemble method with majority voting model constructed previously. In this model, trees are generated based on random subsets of features. This is one advantage of the random forest model as it prevents the greedy behavior of most decision tree algorithms (Lantz, 2023). 
+
+```{r rf, comment = ""}
+# train rf model
+rf_model <- randomForest(death_event ~ ., data = tree_train, mtry = sqrt(14))
+rf_model
+```
+
+## Predicting with the random forest model
+
+```{r rf results, echo = FALSE, comment = ""}
+# predict with trained rf model
+rf_pred <- predict(rf_model, dt_test)
+# rf cfm
+rf_results <- confusionMatrix(rf_pred, test_labels, positive = "1")
+rf_results
+```
+
+Using the training and test data from the decision tree model, the confusion matrix above outputs the results of the trained random forest model on test data. There are `r rf_results$table[1]` true negatives, `r rf_results$table[4]` true positives, `r rf_results$table[2]` false positives, and `r rf_results$table[3]` false negatives. The random forest model had an accuracy of `r rf_results$overall[1]` accuracy. The sensitivity is `r rf_results$byClass[1]` and the specificity is `r rf_results$byClass[2]`. The kappa value is `r rf_results$overall[2]`, which is a moderate agreement. In all performance statistics except for sensitivity, the random forest model performed better than the simple ensemble model. 
+
+## Ensemble model evaluation
+
+The simple ensemble model's performance is rather subpar. Though some may say an accuracy of `r ens_results$overall[1]` is still considered high, previous models were shown to have higher accuracy values and higher sensitivity values. Specifically, the sensitivity of the ensemble model is `r ens_results$byClass[1]`. This is in line with previous models and even triumphs the decision tree sensitivity of `r tree_results$byClass[1]`. Therefore, the ensemble model was an improvement in that it had higher accuracy and sensitivity compared to the logistic regression model and the kNN cross-validation model. However, it falls short as the best performing model when compared to the accuracy and specificity values of the decision tree or kNN model. One thing to note is that the simple ensemble model had the lowest number of false negatives seen out of all models, but the highest number of false positives. This may indicate the classifier's tendency to overly predict positive cases.
+
+On the other hand, the random forest model is a contender for one of the best performing models. It has the highest accuracy of `r rf_results$overall[1]` and second highest kappa value of `r rf_results$overall[2]`. Furthermore, this model has the least number of false negatives and higher F1 values seen out of all the models. Since sensitivity is one of the most important statistics for a model in predicting diagnoses, unfortunately this model's sensitivity of `r rf_results$byClass[1]` is still not the most ideal despite performing well in comparison to the other models. Likewise, even if the random forest model has one of the higher kappa values, the kappa value indicates only a moderate agreement between predictions and actual values. A moderate agreement, sub-60% sensitivity, and only 80% accuracy are not sufficient enough for implementing the model in the real world.
+
+# Conclusion
+## Comparing models
+
+```{r roc curve, echo = FALSE, message = FALSE}
+# calculate roc
+actual <- as.numeric(test_labels) - 1
+roc_knn <- roc(actual, as.numeric(knn_caret_predict)-1)
+roc_knn_cv <- roc(actual, as.numeric(knn_cv_pred) - 1)
+roc_dt <- roc(actual, as.numeric(tree_pred) - 1)
+roc_boosted_dt <- roc(actual, as.numeric(tree_boosted_pred) - 1)
+roc_log <- roc(actual, as.numeric(log_death_pred) - 1)
+roc_tuned <- roc(actual, as.numeric(tuned_pred) - 1)
+roc_ens <- roc(actual, as.numeric(ens_pred) - 1)
+roc_rf <- roc(actual, as.numeric(rf_pred) - 1)
+# plot roc curves
+plot(roc_knn, col = "blue", main = "ROC Curve Comparison", lwd = 2)
+lines(roc_knn_cv, type = "l",col = "red", lwd = 2)
+lines(roc_dt, col = "green", lwd = 2)
+lines(roc_boosted_dt, col = "yellow", lwd = 2)
+lines(roc_log, col = "orange", lwd = 2)
+lines(roc_tuned, col = "purple", lwd = 2)
+lines(roc_ens, col = "pink", lwd = 2)
+lines(roc_rf, col = "black", lwd = 2)
+legend("bottomright", 
+       legend = c("kNN", "kNN Cross-Validation", "Decision Tree",
+                  "Boosted Decision Tree", "Logistic Regression",
+                  "Tuned Logistic Regression", "Simple Ensemble",
+                  "Random Forest"), 
+       col = c("blue", "red", "green", "yellow", "orange", "purple", "pink", "black" ), lwd = 2,
+       inset = c(0.01, 0.01))
+```
+
+The plot above shows the ROC curves of each model. An ideal model would have a ROC curve closer to the top left corner of the plot. The most curved lines are the the C5.0 decision tree, random forest, and kNN lines, indicating that these algorithms may be the best performing algorithms. However, looking at the curves themselves, all models showcase a slight curve instead of a more rounded one. This indicates that they are not close to the ideal as there is still quite a distance between the top corner and the ROC curves. Overall, the ROC curves support the conclusion that none of the models meet industry standards for implementation.
+
+```{r results, echo = FALSE, message = FALSE}
+# created summarized cfm table
+cf <- data.frame(
+  TN = c(sum(test_labels==0), knn_imputed_results$table[1], knn_cv_results$table[1],
+         tree_results$table[1], tree_boosted_results$table[1],
+         log_results$table[1], log_tuned_results$table[1], 
+         ens_results$table[1], rf_results$table[1]),
+  TP = c(sum(test_labels==1), knn_imputed_results$table[4], knn_cv_results$table[4],
+         tree_results$table[4], tree_boosted_results$table[4],
+         log_results$table[4], log_tuned_results$table[4], 
+         ens_results$table[4], rf_results$table[4]),
+  FN = c("-", knn_imputed_results$table[3], knn_cv_results$table[3],
+         tree_results$table[3], tree_boosted_results$table[3],
+         log_results$table[3], log_tuned_results$table[3], 
+         ens_results$table[3], rf_results$table[3]),
+  FP = c("-", knn_imputed_results$table[2], knn_cv_results$table[2],
+         tree_results$table[2], tree_boosted_results$table[2],
+         log_results$table[2], log_tuned_results$table[2], 
+         ens_results$table[2], rf_results$table[2]))
+# create summarize performance statistics table
+results <- data.frame(
+  Accuracy = c(knn_imputed_results$overall[1], knn_cv_results$overall[1], 
+               tree_results$overall[1], tree_boosted_results$overall[1], 
+               log_results$overall[1], log_tuned_results$overall[1], 
+               ens_results$overall[1], rf_results$overall[1]),
+  Sensitivity = c(knn_imputed_results$byClass[1], knn_cv_results$byClass[1], 
+                  tree_results$byClass[1], tree_boosted_results$byClass[1], 
+                  log_results$byClass[1], log_tuned_results$byClass[1],
+                  ens_results$byClass[1], rf_results$byClass[1]),
+  Specificity = c(knn_imputed_results$byClass[2], knn_cv_results$byClass[2], 
+                  tree_results$byClass[2], tree_boosted_results$byClass[2], 
+                  log_results$byClass[2], log_tuned_results$byClass[2], 
+                  ens_results$byClass[2], rf_results$byClass[2]),
+  Kappa = c(knn_imputed_results$overall[2], knn_cv_results$overall[2], 
+            tree_results$overall[2], tree_boosted_results$overall[2], 
+            log_results$overall[2], log_tuned_results$overall[2], 
+            ens_results$overall[2], rf_results$overall[2]),
+  Precision = c(knn_imputed_results$byClass[3], knn_cv_results$byClass[3], 
+                  tree_results$byClass[3], tree_boosted_results$byClass[3], 
+                  log_results$byClass[3], log_tuned_results$byClass[3], 
+                  ens_results$byClass[3], rf_results$byClass[3]))
+# calculate f1 score
+results <- results %>% mutate(F1 = (2*Precision*Sensitivity)/(Precision + Sensitivity))
+# table row names
+row_names1 <- c("Actual", "kNN", "kNN Cross Validation", "C50 Decision Tree", 
+               "C50 Boosted Decision Tree", "Logistic Regression", 
+               "Tuned Logisitic Regression", "Simple Ensemble", "Random Forest")
+row_names2 <- c("kNN", "kNN Cross Validation", "C50 Decision Tree", 
+               "C50 Boosted Decision Tree", "Logistic Regression", 
+               "Tuned Logisitic Regression", "Simple Ensemble", "Random Forest")
+rownames(cf) <- row_names1
+rownames(results) <- row_names2
+# view tables
+kable(cf, caption = "Predictions of classification models")
+kable(results, caption = "Performance statistics of classification models")
+```
+
+When comparing classification counts, it can be seen that the models were able to predict the majority of true negatives. This is reflected in their decently high specificity values as they range from `r round(min(results$Specificity), 2)` to `r round(max(results$Specificity), 2)`. On the other hand, it can be seen that the models had more difficulty predicting the positive class as the number of true positive predictions were barely half the number of actual positives. This is supported by the lower range of sensitivity values ranging from `r round(min(results$Sensitivity), 2)` to `r round(max(results$Sensitivity), 2)`. 
+
+Comparing total sum counts of false positives and false negatives, the C5.0 decision tree, kNN, and simple ensemble model had the lowest counts out of all the models. The C5.0 decision tree model had the highest number of true negative predictions as reflected in the high accuracy value. However, despite having lower counts of false positives and negatives, the `r  tree_results$table[3]` false negatives are still of a concern. Similarly, the kNN and simple ensemble models had lower counts of false negatives but still a significant amount of false positives that offset them. False negatives and false positives have to be minimized, especially in a model that is used to predict major health events in a real world setting.
+
+Concerning performance statistics, the ideal model has accuracy, sensitivity, specificity, and kappa values close to 1. Looking at the results, the C5.0 decision tree model or the random forest model come closest to the ideal. The decision tree and random forest model had the higher accuracy values of `r tree_results$overall[1]` and `r rf_results$overall[1]` respectively and the higher sensitivity values of `r tree_results$byClass[1]` and `r rf_results$byClass[1]` respectively. Likewise, they also have the highest F-scores with a value of `r results$F1[3]` and `r results$F1[8]` for the decision tree and random forest models respectively. A higher F-score indicates that the model is more precise and robust. 
+
+Additionally, the kappa values can also be interpreted to determine the effectiveness of the classification models. Cohen's kappa is more applicable in interpreting the results of the data due to the large unbalanced classes of the target variable (Lantz, 2023). Kappa values decreased when improvement in terms of cross-validation, boosting, or hyperparameter tuning were made to the 3 main models. The range of kappa values from the various models result in "fair to moderate agreement" according to common interpretations, with the decision tree and random forest having the highest kappa values. However, a "fair to moderate" agreement does not suffice when the purpose of the model is predicting the survival of a heart failure patient. 
+
+If one model were to be chosen as the best performing algorithm, the C5.0 decision tree model would be the best model. In concern to performance statistics, the decision tree model ranks consistently high in accuracy, sensitivity, kappa, and F1 values. The decision tree model performs decently well in regards to specificity and precision. Other models fall short in certain statistic and are offset by some improvements in other areas. However, other models have statistics that are not consistently high enough to prove merit as the best model. 
+
+## Real-world application
+
+In a real world setting, the performance of these various models are not enough for implementation in hospital. Overall accuracy is decently high, but not near 100%. Additionally, low sensitivity values and only fair to moderate kappa values are not standard for being the ideal model. Likewise, false negatives are a major concern. Lives are on the line so sensitivity rates must be high enough in order to lower the number of false negatives. A false negative would be detrimental as it results in misdiagnosing a patient as healthy when in reality the patient is not. Nonetheless, the models previously demonstrated can be utilized as a good starting point for constructing a more accurate and ideal model.
+
+Some potential avenues of exploration in order to improve performance statistics would be to gather a large data set. With more data, a model could be able to learn the more subtle patterns and make more accurate predictions. Likewise, other classification algorithms such as k-means clustering or support vector machines could result in better performance statistics.
+
+\newpage
+
+# References
+
+Chugh, V. (2023, March 17). Logistic regression in R tutorial. DataCamp. https://www.datacamp.com/tutorial/logistic-regression-R 
+
+Heart Failure Clinical Records. (2020). UCI Machine Learning Repository. https://doi.org/10.24432/C5Z89R.
+
+Lantz, B. (2023). Machine Learning with R - Fourth Edition. Packt Publishing. 
