@@ -6,7 +6,7 @@ The purpose of this project is to demonstrate various methods of using machine l
 
 The dataset used for this project contains information about heart failure clinical records from the Faisalabad Institute of Cardiology and the Allied Hospital in Faisalabad in Pakistan (Heart Failure Clinical Records, 2020). Data was originally collected to analyze the effects of serum creatinine and ejection fraction on heart failure patients.
 
-The dataset has `r nrow(heart)` observations and `r ncol(heart)` variables. There are 6 categorical variables and 7 numerical variables. - `death_event`: 
+The dataset has 299 observations and 13 variables. There are 6 categorical variables and 7 numerical variables. 
 
 This project aims to explore multiple classification models to predict the target variable `death event`. The `death event` variable is a binary variable that states if the patient died during follow up period (1 = death, 0 = survived).
 
